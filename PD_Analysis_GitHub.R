@@ -1,5 +1,5 @@
 #######
-# PD PROGRESSION ANALYSIS — FINAL CLEAN R SCRIPT
+# PD PROGRESSION ANALYSIS — R SCRIPT
 # Cox-MCP Penalized Survival Analysis | PPMI Cohort
 #
 # Title:   A Transcriptomic Signature of Parkinson's Disease Progression
@@ -8,7 +8,7 @@
 # NOTE: PPMI data are access-controlled and are NOT included in this repository.
 #       Register and download from https://www.ppmi-info.org to reproduce.
 #
-# ── USER CONFIG: set these paths to your local data before running ────────────
+# ── USER CONFIG: set these paths to your local data before running 
 data_dir    <- "data"                 # folder containing the PPMI CSV files
 gmt_dir     <- "data/gmt"             # folder containing the MSigDB .gmt files
 output_dir  <- "output"              # folder where plots/tables will be saved
@@ -18,7 +18,7 @@ meta_file   <- file.path(data_dir, "PPMI_Curated.csv")
 kegg_path     <- file.path(gmt_dir, "c2.cp.kegg.v2022.1.Hs.symbols.gmt")
 reactome_path <- file.path(gmt_dir, "c2.cp.reactome.v2026.1.Hs.symbols.gmt.txt")
 gobp_path     <- file.path(gmt_dir, "c5.go.bp.v2026.1.Hs.symbols.gmt.txt")
-# ──────────────────────────────────────────────────────────────────────────────
+
 
 #  SECTION 0: PACKAGES 
 library(readr);     library(dplyr);      library(stringr)
@@ -259,7 +259,6 @@ tab1 <- CreateTableOne(
   data = desc_data, factorVars = factVars, addOverall = TRUE
 )
 
-cat("\n--- TABLE 1: BASELINE CHARACTERISTICS ---\n")
 print(tab1, varLabels = TRUE, showAllLevels = TRUE,
       printToggle = TRUE, quote = FALSE, noSpaces = TRUE, test = TRUE)
 
@@ -267,7 +266,7 @@ print(tab1, varLabels = TRUE, showAllLevels = TRUE,
 
 
 
-# ── KM PLOTS 
+#  KM PLOTS 
 cat("\n--- Figure 1A: KM Overall ---\n")
 km_fit  <- survfit(Surv(time_months, event) ~ 1, data = surv_tbl)
 km_plot <- ggsurvplot(
@@ -389,7 +388,7 @@ gene_info <- AnnotationDbi::select(
 cox_res_all_adj <- cox_res_all_adj %>%
   left_join(gene_info, by = c("gene_clean" = "ENSEMBL"))
 
-# ── ALL 62 SIGNIFICANT GENES 
+# ALL 62 SIGNIFICANT GENES 
 sig_62 <- cox_res_all_adj %>%
   filter(p_value < 0.05) %>%
   dplyr::select(gene, SYMBOL, GENENAME, coef, HR, HR_low, HR_high,
@@ -420,7 +419,7 @@ Y_surv    <- Surv(surv_tbl$time_months, surv_tbl$event)
 set.seed(2025)
 fold      <- createFolds(cut(surv_tbl$time_months, breaks = 5), k = 5, list = FALSE)
 
-# ── Z-SCORE GENE EXPRESSION 
+# Z-SCORE GENE EXPRESSION 
 X_sig <- scale(X_sig)   # mean = 0, sd = 1 per gene
 # 
 
@@ -458,7 +457,7 @@ core_genes <- Reduce(intersect, list(lasso_genes, mcp_genes, scad_genes))
 cat("\nCore (all 3 methods):", length(core_genes), "genes\n")
 print(core_genes)
 
-# ── FIGURE 2: Venn Diagram 
+# FIGURE 2: Venn Diagram 
 
 if (!requireNamespace("ggVennDiagram", quietly = TRUE))
   install.packages("ggVennDiagram")
@@ -578,6 +577,36 @@ print(summary(cox_mcp_full))
 
 cat("\n--- Proportional Hazards Test ---\n")
 print(cox.zph(cox_mcp_full))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 6b: LEAKAGE-FREE NESTED CROSS-VALIDATION
+# MCP selection is repeated INSIDE each training fold, so held-out folds never
+# contribute to gene selection.
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+X_all_c <- X_all[complete_idx, ]
+
+set.seed(2025)
+cv_nested <- numeric(5); n_genes_perfold <- numeric(5)
+for (k in 1:5) {
+  tr <- fold_complete != k
+  te <- fold_complete == k
+  fit_k  <- cv.ncvsurv(X_all_c[tr, ], y_surv_complete[tr],
+                       penalty = "MCP", penalty.factor = penalty_factor)
+  beta_k <- as.numeric(coef(fit_k, lambda = fit_k$lambda.min))
+  n_genes_perfold[k] <- sum(beta_k[seq_len(ncol(X_sig))] != 0)
+  lp_te  <- as.numeric(X_all_c[te, ] %*% beta_k)
+  cv_nested[k] <- cal_c(lp_te, surv_complete$time_months[te], surv_complete$event[te])
+}
+cat("Nested-CV MCP (62 genes + age/sex): C =", round(mean(cv_nested), 3), "\n")
+cat("  Genes selected per fold:", paste(n_genes_perfold, collapse = ", "), "\n")
+
+cat("\n--- Nested-CV comparison ---\n")
+cat("Age + Sex + Clinical    :", round(mean(cv2), 3), "\n")
+cat("Nested MCP + Age/Sex    :", round(mean(cv_nested), 3), "\n")
+cat("(Fixed-signature MCP Model 3 =", round(mean(cv_mcp_full), 3), ")\n")
 
 
 # SECTION 7: FOREST PLOT — MCP GENE EFFECTS
@@ -719,7 +748,6 @@ cat("Saved: Figure_5_Brier_Score\n")
 
 ####################
 # GENE SET ENRICHMENT ANALYSIS (GSEA) — PD Progression
-# Based on Dr. Saha's GSEA.R template
 # Uses: KEGG, Reactome, GO Biological Process (MSigDB)
 # Input: Univariate Cox HR for all 17,168 genes
 ################
@@ -938,8 +966,60 @@ saveWorkbook(wb, file.path(plot_dir, "GSEA_Results_All_Databases.xlsx"),
 cat("\nSaved: GSEA_Results_All_Databases.xlsx\n")
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 10: DIFFERENTIAL EXPRESSION — PD vs HEALTHY CONTROLS (limma-trend)
+# Complementary analysis testing whether a disease-presence signature (PD vs HC)
+# predicts progression. Produces Supplementary Table S4.
+# Uses limma-trend on log2-TPM (eBayes trend = TRUE, robust = TRUE).
+# ══════════════════════════════════════════════════════════════════════════════
+cat("\n========== SECTION 10: DIFFERENTIAL EXPRESSION (PD vs Control) ==========\n")
 
+library(limma)
 
+# PD patients at baseline (cohort 1)
+pd_baseline_de <- meta2 %>%
+  filter(cohort == 1, event_id == "BL") %>%
+  dplyr::select(patno, age_at_visit, sex) %>%
+  filter(!is.na(age_at_visit), !is.na(sex))
+pd_samples <- sample_info %>%
+  filter(event == "BL") %>%
+  inner_join(pd_baseline_de, by = "patno") %>%
+  mutate(group = "PD") %>%
+  dplyr::select(sample, patno, age = age_at_visit, sex, group)
 
+# Healthy controls at baseline (cohort 2)
+controls_baseline <- meta2 %>%
+  filter(cohort == 2, event_id == "BL") %>%
+  dplyr::select(patno, age_at_visit, sex) %>%
+  filter(!is.na(age_at_visit), !is.na(sex))
+control_samples <- sample_info %>%
+  filter(event == "BL") %>%
+  inner_join(controls_baseline, by = "patno") %>%
+  mutate(group = "Control") %>%
+  dplyr::select(sample, patno, age = age_at_visit, sex, group)
+
+# Combine (Control = reference; positive logFC = higher in PD)
+limma_samples <- bind_rows(pd_samples, control_samples) %>%
+  mutate(group = factor(group, levels = c("Control", "PD")), sex = factor(sex))
+cat("PD:", sum(limma_samples$group == "PD"),
+    "| Control:", sum(limma_samples$group == "Control"),
+    "| Total:", nrow(limma_samples), "\n")
+
+# Expression matrix (log2-TPM), design, fit
+expr_limma <- logtpm[, limma_samples$sample, drop = FALSE]
+design <- model.matrix(~ age + sex + group, data = limma_samples)
+fit    <- lmFit(expr_limma, design)
+fit    <- eBayes(fit, trend = TRUE, robust = TRUE)
+
+de_results <- topTable(fit, coef = "groupPD", number = Inf, adjust.method = "BH")
+de_results$gene <- rownames(de_results)
+cat("Genes tested:", nrow(de_results),
+    "| Significant (adj.P < 0.05):", sum(de_results$adj.P.Val < 0.05), "\n")
+
+# Top 50 for Supplementary Table S4
+de_top50 <- head(de_results[order(de_results$P.Value), ], 50)
+cat("\n--- Top 50 DE genes (Table S4) ---\n")
+print(de_top50[, c("gene", "logFC", "AveExpr", "P.Value", "adj.P.Val")],
+      row.names = FALSE)
 
 
