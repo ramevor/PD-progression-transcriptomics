@@ -1,5 +1,5 @@
 #######
-# PD PROGRESSION ANALYSIS — R SCRIPT
+# PD PROGRESSION ANALYSIS
 # Cox-MCP Penalized Survival Analysis | PPMI Cohort
 #
 # Title:   A Transcriptomic Signature of Parkinson's Disease Progression
@@ -8,7 +8,7 @@
 # NOTE: PPMI data are access-controlled and are NOT included in this repository.
 #       Register and download from https://www.ppmi-info.org to reproduce.
 #
-# ── USER CONFIG: set these paths to your local data before running 
+# USER CONFIG: set these paths to your local data before running
 data_dir    <- "data"                 # folder containing the PPMI CSV files
 gmt_dir     <- "data/gmt"             # folder containing the MSigDB .gmt files
 output_dir  <- "output"              # folder where plots/tables will be saved
@@ -18,7 +18,7 @@ meta_file   <- file.path(data_dir, "PPMI_Curated.csv")
 kegg_path     <- file.path(gmt_dir, "c2.cp.kegg.v2022.1.Hs.symbols.gmt")
 reactome_path <- file.path(gmt_dir, "c2.cp.reactome.v2026.1.Hs.symbols.gmt.txt")
 gobp_path     <- file.path(gmt_dir, "c5.go.bp.v2026.1.Hs.symbols.gmt.txt")
-
+#
 
 #  SECTION 0: PACKAGES 
 library(readr);     library(dplyr);      library(stringr)
@@ -259,6 +259,7 @@ tab1 <- CreateTableOne(
   data = desc_data, factorVars = factVars, addOverall = TRUE
 )
 
+cat("\n--- TABLE 1: BASELINE CHARACTERISTICS ---\n")
 print(tab1, varLabels = TRUE, showAllLevels = TRUE,
       printToggle = TRUE, quote = FALSE, noSpaces = TRUE, test = TRUE)
 
@@ -266,7 +267,7 @@ print(tab1, varLabels = TRUE, showAllLevels = TRUE,
 
 
 
-#  KM PLOTS 
+# ── KM PLOTS 
 cat("\n--- Figure 1A: KM Overall ---\n")
 km_fit  <- survfit(Surv(time_months, event) ~ 1, data = surv_tbl)
 km_plot <- ggsurvplot(
@@ -349,7 +350,6 @@ cox_res_all_univar <- map_dfr(genes_to_test, fit_cox_univar) %>%
 cat("Univariate: p < 0.05:", sum(cox_res_all_univar$p_value < 0.05),
     "| FDR < 0.05:", sum(cox_res_all_univar$p_adj < 0.05), "\n")
 
-cat("\n--- Age/Sex Adjusted Cox ---\n")
 fit_cox_adj <- function(gene) {
   expr_vec <- get_baseline_expr(gene)
   df   <- surv_tbl %>% mutate(gexpr = as.numeric(scale(expr_vec)))
@@ -388,7 +388,7 @@ gene_info <- AnnotationDbi::select(
 cox_res_all_adj <- cox_res_all_adj %>%
   left_join(gene_info, by = c("gene_clean" = "ENSEMBL"))
 
-# ALL 62 SIGNIFICANT GENES 
+#  ALL 62 SIGNIFICANT GENES 
 sig_62 <- cox_res_all_adj %>%
   filter(p_value < 0.05) %>%
   dplyr::select(gene, SYMBOL, GENENAME, coef, HR, HR_low, HR_high,
@@ -419,7 +419,7 @@ Y_surv    <- Surv(surv_tbl$time_months, surv_tbl$event)
 set.seed(2025)
 fold      <- createFolds(cut(surv_tbl$time_months, breaks = 5), k = 5, list = FALSE)
 
-# Z-SCORE GENE EXPRESSION 
+# ── Z-SCORE GENE EXPRESSION 
 X_sig <- scale(X_sig)   # mean = 0, sd = 1 per gene
 # 
 
@@ -578,12 +578,7 @@ print(summary(cox_mcp_full))
 cat("\n--- Proportional Hazards Test ---\n")
 print(cox.zph(cox_mcp_full))
 
-
-# ══════════════════════════════════════════════════════════════════════════════
 # SECTION 6b: LEAKAGE-FREE NESTED CROSS-VALIDATION
-# MCP selection is repeated INSIDE each training fold, so held-out folds never
-# contribute to gene selection.
-# ══════════════════════════════════════════════════════════════════════════════
 
 
 X_all_c <- X_all[complete_idx, ]
@@ -607,6 +602,87 @@ cat("\n--- Nested-CV comparison ---\n")
 cat("Age + Sex + Clinical    :", round(mean(cv2), 3), "\n")
 cat("Nested MCP + Age/Sex    :", round(mean(cv_nested), 3), "\n")
 cat("(Fixed-signature MCP Model 3 =", round(mean(cv_mcp_full), 3), ")\n")
+
+
+
+# Fixed-lambda nested CV
+# Instead of re-tuning lambda within each fold, we fix lambda at the value
+# selected by the full-data MCP + age/sex fit (Model 6).
+
+# Step 1: full-data MCP + age/sex fit (Model 6)
+X_full_as <- cbind(X_sig, age = surv_tbl$age_at_visit,
+                   sex = as.numeric(surv_tbl$sex))
+y_full_as <- Surv(surv_tbl$time_months, surv_tbl$event)
+set.seed(2025)
+mcp_as_fit   <- cv.ncvsurv(X_full_as, y_full_as, penalty = "MCP",
+                           penalty.factor = c(rep(1, ncol(X_sig)), 0, 0))
+lambda_fixed <- mcp_as_fit$lambda.min
+cat("Fixed lambda from Model 6 (MCP + age/sex):", round(lambda_fixed, 6), "\n")
+
+# Step 2: nested CV at the FIXED lambda (uses complete-case folds)
+cv_fixedlam <- numeric(5); gene_counts_fl <- numeric(5)
+for (k in 1:5) {
+  tr <- fold_complete != k; te <- fold_complete == k
+  # Fit a short 2-point lambda path and extract the solution at lambda_fixed
+  # (ncvsurv is intended for pathwise optimization; this avoids convergence
+  # warnings and inferior local optima with the MCP penalty).
+  fit_k <- ncvsurv(X_all_c[tr, ], y_surv_complete[tr], penalty = "MCP",
+                   penalty.factor = penalty_factor,
+                   lambda = c(lambda_fixed * 1.05, lambda_fixed))
+  beta_k <- as.numeric(coef(fit_k)[, 2])
+  gene_counts_fl[k] <- sum(beta_k[seq_len(ncol(X_sig))] != 0)
+  lp_te <- as.numeric(X_all_c[te, ] %*% beta_k)
+  cv_fixedlam[k] <- cal_c(lp_te, surv_complete$time_months[te], surv_complete$event[te])
+  cat("Fold", k, ":", gene_counts_fl[k], "genes, C =", round(cv_fixedlam[k], 4), "\n")
+}
+cat("Fixed-lambda nested CV: C =", round(mean(cv_fixedlam), 4),
+    "\u00B1", round(sd(cv_fixedlam), 4), "\n")
+
+
+
+# Nested CV WITH clinical variables
+# Genes penalized; age, sex, and the four clinical variables all UNPENALIZED.
+
+sc      <- surv_tbl_ext[complete_idx, ]
+X_sig_c2 <- X_sig[complete_idx, ]
+X_clin  <- cbind(X_sig_c2,
+                 age = sc$age_at_visit, sex = as.numeric(sc$sex),
+                 updrs3 = sc$updrs3_score, td_pigd = sc$td_pigd,
+                 moca = sc$moca, rem = sc$rem)
+y_clin  <- Surv(sc$time_months, sc$event)
+pf_clin <- c(rep(1, ncol(X_sig_c2)), 0, 0, 0, 0, 0, 0)
+
+# (A) Fully nested + clinical (lambda re-tuned per fold)
+set.seed(2025)
+cv_nested_clin <- numeric(5); ng_nested_clin <- numeric(5)
+for (k in 1:5) {
+  tr <- fold_complete != k; te <- fold_complete == k
+  fit_k  <- cv.ncvsurv(X_clin[tr, ], y_clin[tr], penalty = "MCP", penalty.factor = pf_clin)
+  beta_k <- as.numeric(coef(fit_k, lambda = fit_k$lambda.min))
+  ng_nested_clin[k] <- sum(beta_k[seq_len(ncol(X_sig_c2))] != 0)
+  lp_te  <- as.numeric(X_clin[te, ] %*% beta_k)
+  cv_nested_clin[k] <- cal_c(lp_te, sc$time_months[te], sc$event[te])
+}
+cat("Fully nested + clinical: C =", round(mean(cv_nested_clin), 3),
+    "| genes/fold:", paste(ng_nested_clin, collapse = ", "), "\n")
+
+# (B) Fixed-lambda nested + clinical
+set.seed(2025)
+mcp_clin_fit      <- cv.ncvsurv(X_clin, y_clin, penalty = "MCP", penalty.factor = pf_clin)
+lambda_fixed_clin <- mcp_clin_fit$lambda.min
+cv_fl_clin <- numeric(5); ng_fl_clin <- numeric(5)
+for (k in 1:5) {
+  tr <- fold_complete != k; te <- fold_complete == k
+  fit_k <- ncvsurv(X_clin[tr, ], y_clin[tr], penalty = "MCP", penalty.factor = pf_clin,
+                   lambda = c(lambda_fixed_clin * 1.05, lambda_fixed_clin))
+  beta_k <- as.numeric(coef(fit_k)[, 2])
+  ng_fl_clin[k] <- sum(beta_k[seq_len(ncol(X_sig_c2))] != 0)
+  lp_te <- as.numeric(X_clin[te, ] %*% beta_k)
+  cv_fl_clin[k] <- cal_c(lp_te, sc$time_months[te], sc$event[te])
+}
+cat("Fixed-lambda nested + clinical (lambda =", round(lambda_fixed_clin, 4), "): C =",
+    round(mean(cv_fl_clin), 3),
+    "| genes/fold:", paste(ng_fl_clin, collapse = ", "), "\n")
 
 
 # SECTION 7: FOREST PLOT — MCP GENE EFFECTS
@@ -658,7 +734,6 @@ save_plot(forest_plot, "Figure_3_Forest_Plot_MCP_Genes", width = 9, height = 7)
 
 # SECTION 8: RISK GROUP STRATIFICATION + KM PLOT
 
-
 pred_risk  <- predict(cox_mcp_full, type = "lp")
 tertiles   <- quantile(pred_risk, probs = c(1/3, 2/3))
 risk_group <- cut(pred_risk,
@@ -700,7 +775,6 @@ save_km_plot(km_risk_plot, "Figure_4_KM_Risk_Groups", width = 9, height = 8)
 
 
 # SECTION 9: BRIER SCORE (CALIBRATION)
-
 
 data_for_pec             <- data_mcp_full
 data_for_pec$time_months <- surv_complete$time_months
@@ -871,8 +945,6 @@ top10_gobp     <- print_top10(res_gobp,     "GO BP")
 
 # STEP 5: PLOTS
 
-cat("\n========== STEP 5: PLOTS ==========\n")
-
 plot_top_pathways <- function(res, db_name, n = 15) {
   top_pos <- res %>% filter(NES > 0, padj < 0.05) %>% arrange(padj) %>% head(ceiling(n/2))
   top_neg <- res %>% filter(NES < 0, padj < 0.05) %>% arrange(padj) %>% head(floor(n/2))
@@ -965,14 +1037,9 @@ saveWorkbook(wb, file.path(plot_dir, "GSEA_Results_All_Databases.xlsx"),
              overwrite = TRUE)
 cat("\nSaved: GSEA_Results_All_Databases.xlsx\n")
 
-
-# ══════════════════════════════════════════════════════════════════════════════
 # SECTION 10: DIFFERENTIAL EXPRESSION — PD vs HEALTHY CONTROLS (limma-trend)
 # Complementary analysis testing whether a disease-presence signature (PD vs HC)
-# predicts progression. Produces Supplementary Table S4.
-# Uses limma-trend on log2-TPM (eBayes trend = TRUE, robust = TRUE).
-# ══════════════════════════════════════════════════════════════════════════════
-cat("\n========== SECTION 10: DIFFERENTIAL EXPRESSION (PD vs Control) ==========\n")
+# predicts progression.
 
 library(limma)
 
@@ -1021,5 +1088,3 @@ de_top50 <- head(de_results[order(de_results$P.Value), ], 50)
 cat("\n--- Top 50 DE genes (Table S4) ---\n")
 print(de_top50[, c("gene", "logFC", "AveExpr", "P.Value", "adj.P.Val")],
       row.names = FALSE)
-
-
