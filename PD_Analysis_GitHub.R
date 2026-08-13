@@ -1,7 +1,4 @@
 #######
-# PD PROGRESSION ANALYSIS
-# Cox-MCP Penalized Survival Analysis | PPMI Cohort
-#
 # Title:   A Transcriptomic Signature of Parkinson's Disease Progression
 # Authors: Amevor R, McLain AC, Zhang J, Saha E, Ghosal R
 #
@@ -258,17 +255,11 @@ tab1 <- CreateTableOne(
   vars = vars, strata = "progression",
   data = desc_data, factorVars = factVars, addOverall = TRUE
 )
-
-cat("\n--- TABLE 1: BASELINE CHARACTERISTICS ---\n")
 print(tab1, varLabels = TRUE, showAllLevels = TRUE,
       printToggle = TRUE, quote = FALSE, noSpaces = TRUE, test = TRUE)
 
 
-
-
-
-# ── KM PLOTS 
-cat("\n--- Figure 1A: KM Overall ---\n")
+# KM PLOTS 
 km_fit  <- survfit(Surv(time_months, event) ~ 1, data = surv_tbl)
 km_plot <- ggsurvplot(
   km_fit, data = surv_tbl,
@@ -316,7 +307,6 @@ save_km_plot(km_sex_plot, "Figure_1C_KM_by_Sex", width = 8, height = 7)
 
 
 # SECTION 4: GENE SCREENING
-
 
 genes_to_test <- rownames(logtpm)
 cat("Total genes:", length(genes_to_test), "\n")
@@ -412,16 +402,14 @@ print(as.data.frame(sig_62), row.names = FALSE)
 
 # SECTION 5: PENALIZED GENE SELECTION
 
-
 sig_genes <- sig_62$gene
 X_sig     <- t(logtpm[sig_genes, surv_tbl$bl_sample])
 Y_surv    <- Surv(surv_tbl$time_months, surv_tbl$event)
 set.seed(2025)
 fold      <- createFolds(cut(surv_tbl$time_months, breaks = 5), k = 5, list = FALSE)
 
-# ── Z-SCORE GENE EXPRESSION 
+# Z-SCORE GENE EXPRESSION 
 X_sig <- scale(X_sig)   # mean = 0, sd = 1 per gene
-# 
 
 X_all          <- cbind(X_sig, age = surv_tbl$age_at_visit,
                         sex = as.numeric(surv_tbl$sex))
@@ -493,7 +481,6 @@ save_plot(venn_plot, "Figure_2_Venn_Diagram", width = 7, height = 6)
 
 # SECTION 6: CROSS-VALIDATION C-INDICES
 
-
 cal_c <- function(marker, Stime, status) {
   utimes <- sort(unique(Stime[status == 1]))
   num <- denom <- 0
@@ -509,7 +496,7 @@ cal_c <- function(marker, Stime, status) {
   1 - num / denom
 }
 
-# Model 1: Age + Sex — full-data concordance (CV unstable with 2 predictors)
+# Model 1: Age + Sex — full-data concordance
 fit_m1  <- coxph(Surv(time_months, event) ~ age_at_visit + sex, data = surv_tbl)
 c1_full <- summary(fit_m1)$concordance[1]
 cat("Model 1 (Age+Sex): Full-data C =", round(c1_full, 3), "\n")
@@ -572,14 +559,12 @@ for (k in 1:5) {
 cat("Model 3 (Cox-MCP Full): CV C =", round(mean(cv_mcp_full), 3),
     "| Full C =", round(c_full_mcp_full, 3), "\n")
 
-cat("\n--- Summary: Cox-MCP Full Model ---\n")
 print(summary(cox_mcp_full))
 
-cat("\n--- Proportional Hazards Test ---\n")
 print(cox.zph(cox_mcp_full))
 
-# SECTION 6b: LEAKAGE-FREE NESTED CROSS-VALIDATION
 
+# SECTION 6b: LEAKAGE-FREE NESTED CROSS-VALIDATION
 
 X_all_c <- X_all[complete_idx, ]
 
@@ -1085,6 +1070,5 @@ cat("Genes tested:", nrow(de_results),
 
 # Top 50 for Supplementary Table S4
 de_top50 <- head(de_results[order(de_results$P.Value), ], 50)
-cat("\n--- Top 50 DE genes (Table S4) ---\n")
 print(de_top50[, c("gene", "logFC", "AveExpr", "P.Value", "adj.P.Val")],
       row.names = FALSE)
