@@ -52,7 +52,7 @@ Open `PD_Analysis_GitHub.R`, set the paths in the **USER CONFIG** block, and run
 | 1 | Data loading, TPM filtering, log2 transform |
 | 2 | Cohort definition (HY 1–2 at baseline → HY ≥ 3 transition) |
 | 3 | Descriptive statistics (Table 1), Kaplan–Meier curves |
-| 4 | Univariate and age/sex-adjusted Cox gene screening |
+| 4 | Univariate and age/sex/race-adjusted Cox gene screening |
 | 5 | Penalized selection (LASSO / MCP / SCAD), Venn diagram |
 | 6 | Cross-validated C-index for nested models |
 | 7 | Forest plot of MCP gene effects |
